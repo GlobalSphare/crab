@@ -55,8 +55,6 @@ POST / HTTP/1.1
 |InstanceId|实例id|string|无|是|
 |UserConfig|运行时配置|object|{}|否|
 |Dependencies|实例依赖|dependency object|{}|否|
-|RootDomain|根域|string|无|是|
-|WorkloadPath|绝对路径|string|无|是|
 
 Dependencies.Internal 内部的服务, 数组类型, 非必填, 内容如下：
 

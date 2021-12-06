@@ -12,6 +12,7 @@ import (
 	"k8s.io/klog/v2"
 	"math/rand"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -127,7 +128,7 @@ func GenValeYaml(instanceId string, application v1alpha1.Application, userconfig
 	if userconfig == "null" || userconfig == "" {
 		userconfig = "{}"
 	}
-	configItemData = append(configItemData, ConfigItemDataItem{Name: "userconfig", Value: userconfig})
+	configItemData = append(configItemData, ConfigItemDataItem{Name: "userconfigs", Value: userconfig})
 	for _, workload := range application.Spec.Workloads {
 		service := serviceVela(workload, instanceId, authorization, serviceEntry, configItemData, rootDomain)
 		vela.Services[workload.Name] = service
@@ -350,14 +351,17 @@ func serviceVela(workload v1alpha1.Workload, instanceid string, authorization []
 	var traits = make(map[string]interface{}, 0)
 	if len(workload.Traits) > 0 {
 		for _, trait:= range workload.Traits {
-			if trait.Type == "globalsphare.com/v1alpha1/trait/ingress" {
+			traitName := ""
+			pos := strings.LastIndex(trait.Type, "/")
+			if pos > 0 {
+				traitName = trait.Type[pos+1:len(trait.Type)-5]
+			}
+			if traitName == "ingress" && len(trait.Properties) == 0 {
 				traitProperties := make(map[string]interface{}, 0)
 				traitProperties["host"] = fmt.Sprintf("%s.%s", instanceid, rootDomain)
 				path := make([]string, 0)
 				traitProperties["path"] = append(path, "/*")
-				traits[trait.Type] = traitProperties
-
-
+				traits[traitName] = traitProperties
 			}else{
 				traits[trait.Type] =  GetProperties(trait.Properties)
 			}
@@ -435,21 +439,6 @@ func parseDependencies(application v1alpha1.Application, dependencies Dependency
 	return auth, svcEntry, cm, err
 }
 
-
-//traits中包含ingress的组件名称
-func entryService(workloads []v1alpha1.Workload) string {
-	for _, svc := range workloads {
-		for _, v := range svc.Traits {
-			arr := strings.Split(v.Type, "/")
-			trait := arr[len(arr)-1]
-			if trait == "ingress" {
-				return svc.Name
-			}
-		}
-	}
-	return ""
-}
-
 func ApiParse(uses map[string][]string) ([]DependencyUseItem, error) {
 	var err error
 	rtn := make([]DependencyUseItem, 0)
@@ -486,46 +475,86 @@ func checkParams(application v1alpha1.Application, workloadPath string) (map[str
 		return returnData, err
 	}
 	for _, workload := range application.Spec.Workloads {
-		//检查type参数
-		err = CheckTypeParam(workload, workloadPath)
+		//获取workloadType定义
+		contentType, err := GetFileContent(workload.Type)
 		if err != nil {
 			klog.Errorln(err)
 			return returnData, err
 		}
-		//trait:ingress只能有一个
+		var t v1alpha1.WorkloadType
+		err = yaml.Unmarshal([]byte(contentType), &t)
+		if err != nil {
+			klog.Errorln(err)
+			return returnData, err
+		}
+		//传递的参数
+		properties := GetProperties(workload.Properties)
+		propertiesJson, err := json.Marshal(properties)
+		if err != nil {
+			klog.Errorln(err)
+			return returnData, err
+		}
+		//检查type参数
+		err = CheckTypeParam(t.Spec.Parameter, string(propertiesJson))
+		if err != nil {
+			klog.Errorln(err)
+			return returnData, err
+		}
+
+		//trait:ingress最多有一个
 		//检查trait参数
-		traitCount := 0
+		//traitCount := 0
 		if len(workload.Traits) > 0 {
 			for _, trait := range workload.Traits {
-				err = CheckTraitParam(trait, workloadPath)
+				err = CheckTraitParam(trait)
 				if err != nil {
 					return returnData, err
 				}
-				arr := strings.Split(trait.Type, "/")
-				if arr[len(arr)-1] == "ingress" {
-					traitCount++
-				}
+				//arr := strings.Split(trait.Type, "/")
+				//if arr[len(arr)-1] == "ingress" {
+				//	traitCount++
+				//}
 			}
 		}
-		if traitCount > 1 {
-			err = errors.New("检测到多个ingress")
-			return returnData, err
-		}
+		//if traitCount > 1 {
+		//	err = errors.New("检测到多个ingress")
+		//	return returnData, err
+		//}
 		var workloadParams WorkloadParam
 		workloadParams.Type = workload.Type
 		workloadParams.Vendor = workload.Vendor
-
-		properties := GetProperties(workload.Properties)
 		workloadParams.Parameter = properties
-
-		t, _ := GetWorkloadType(workload.Type, workloadPath)
 		workloadParams.Traits = t.Spec.Traits
 
+		vData, err := GetFileContent(workload.Vendor)
 		var v v1alpha1.WorkloadVendor
-		v, err = GetWorkloadVendor(workload.Vendor, workloadPath)
-		if err != nil {
-			return returnData, err
+		err = yaml.Unmarshal(vData, &v)
+		if err !=  nil {
+			klog.Errorln(err)
+			return returnData, nil
 		}
+		ioutil.WriteFile("2.cue", []byte(v.Spec), 0644)
+		//mod目录
+		pos := strings.Index(workload.Vendor, "workloadVendor")
+		baseUrl := workload.Vendor[:pos+len("workloadVendor")+1]
+		//替换import为真实内容
+		re, _ := regexp.Compile("import\\s*\"([^\"]*)\"")
+		matchResult := re.FindAllStringSubmatch(v.Spec, -1)
+		for _, vv := range matchResult {
+			if len(matchResult) > 0 {
+				if _,ok := cuePkg[vv[1]];ok{
+					continue
+				}
+				includeMod, err := ImportModTemplate(baseUrl, vv[1]+".cue")
+				if err != nil {
+					klog.Errorln(err.Error())
+					return returnData, nil
+				}
+				v.Spec = strings.ReplaceAll(v.Spec, vv[0], includeMod)
+			}
+		}
+		ioutil.WriteFile("1.yaml", []byte(v.Spec), 0644)
+
 		workloadParams.VendorCue = v.Spec
 		returnData[workload.Name] = workloadParams
 	}
@@ -603,35 +632,11 @@ func GetProperties(properties map[string]interface{}) map[string]interface{} {
 }
 
 //校验type参数
-func CheckTypeParam (workload v1alpha1.Workload, vendorDir string) error{
-	var t v1alpha1.WorkloadType
+func CheckTypeParam (parameter, properties string) error{
 	var err error
-	properties := GetProperties(workload.Properties)
-	if workload.Type == "" {
-		err = errors.New("workload.Type 不能为空")
-		return err
-	}
-	if workload.Vendor == "" {
-		err = errors.New("workload.Vendor 不能为空")
-		return err
-	}
-	t, err = GetWorkloadType(workload.Type, vendorDir)
-	if err != nil {
-		klog.Infoln(err)
-		return err
-	}
-	t, err = GetWorkloadType(workload.Type, vendorDir)
-	if err != nil {
-		klog.Infoln(err)
-		return err
-	}
-	properties2, err := json.Marshal(properties)
-	if err != nil {
-		return err
-	}
-	parameterStr := fmt.Sprintf("parameter:{ \n%s\n}\nparameter:{\n%s\n}", t.Spec.Parameter, string(properties2))
+	text := fmt.Sprintf("parameter:{ \n%s\n}\nparameter:{\n%s\n}", parameter, properties)
 	path := fmt.Sprintf("/tmp/%s.cue", RandomStr())
-	ioutil.WriteFile(path, []byte(parameterStr), 0644)
+	ioutil.WriteFile(path, []byte(text), 0644)
 	command := fmt.Sprintf("/usr/local/bin/cue vet -c %s", path)
 	cmd := exec.Command("bash", "-c", command)
 	var stderr bytes.Buffer
@@ -646,21 +651,24 @@ func CheckTypeParam (workload v1alpha1.Workload, vendorDir string) error{
 	return nil
 }
 //校验trait参数
-func CheckTraitParam (workloadTrait Trait, vendorDir string) error {
+func CheckTraitParam (workloadTrait Trait) error {
 	properties := GetProperties(workloadTrait.Properties)
 	properties2, err := json.Marshal(properties)
 	if err != nil {
 		klog.Errorln(err)
 		return errors.New("trait参数序列化失败")
 	}
-	file, err := GetTrait(workloadTrait.Type, vendorDir)
+	file, err := GetFileContent(workloadTrait.Type)
 	if err != nil {
 		klog.Errorln(err)
 		return err
 	}
-	tmpcue := fmt.Sprintf("parameter: \n%s\nparameter: {\n%s\n}", string(properties2), file.Spec.Parameter)
+	var t v1alpha1.Trait
+	//解析为结构体
+	err = yaml.Unmarshal([]byte(file), &t)
+	text := fmt.Sprintf("parameter: \n%s\nparameter: {\n%s\n}", string(properties2), t.Spec.Parameter)
 	path := fmt.Sprintf("/tmp/%s.cue", RandomStr())
-	err = ioutil.WriteFile(path, []byte(tmpcue), 0644)
+	err = ioutil.WriteFile(path, []byte(text), 0644)
 	if err != nil {
 		klog.Errorln(err)
 		return err
@@ -725,4 +733,54 @@ func moveCuePkgToTop(str string) string{
 		}
 	}
 	return strings.Join(pkg, "\n")+"\n"+ str
+}
+
+//通过http获取资源
+func GetFileContent (path string) ([]byte, error){
+	data := make([]byte, 0)
+	var err error
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		path = fmt.Sprintf("https://%s", path)
+	}
+	resp,err := http.Get(path)
+	if err != nil {
+		klog.Errorln(err)
+		return data, err
+	}
+	rbody := (*resp).Body
+	defer rbody.Close()
+	bText,err := ioutil.ReadAll(rbody)
+	if err != nil {
+		return data, err
+	}
+	return bText, nil
+}
+
+//替换文本中导入的模块
+func ImportModTemplate(baseUrl, modName string) (string, error){
+	var err error
+	bData, err := GetFileContent(baseUrl+modName)
+	if err != nil {
+		klog.Errorln(err)
+		return "",err
+	}
+
+	content := string(bData)
+	//替换import为真实内容
+	re, _ := regexp.Compile("import\\s*\"([^\"]*)\"")
+	matchResult := re.FindAllStringSubmatch(content, -1)
+	for _, v := range matchResult {
+		if len(matchResult) > 0 {
+			if _,ok := cuePkg[v[1]];ok{
+				continue
+			}
+			includeMod, err := ImportModTemplate(baseUrl, v[1]+".cue")
+			if err != nil {
+				klog.Errorln(err.Error())
+				return "", err
+			}
+			content = strings.ReplaceAll(content, v[0], includeMod)
+		}
+	}
+	return content, nil
 }
