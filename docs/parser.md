@@ -52,20 +52,6 @@ POST / HTTP/1.1
 |名称|说明|类型|默认值|是否必填|
 |---|---|---|---|---|
 |Content|文件内容|string|无|是|
-|InstanceId|实例id|string|无|是|
-|UserConfig|运行时配置|object|{}|否|
-|Dependencies|实例依赖|dependency object|{}|否|
-
-Dependencies.Internal 内部的服务, 数组类型, 非必填, 内容如下：
-
-* Dependencies.Internal.[i].Name 应用的name string类型, 必填
-* Dependencies.Internal.[i].InstanceId 内部服务实例id，string类型, 必填
-* Dependencies.Internal.[i].EntryService 服务暴露的组件的名称，string类型, 必填
-
-Dependencies.External 外部的服务, 数组类型, 非必填, 内容如下：
-
-* Dependencies.External[i].Name 应用的name string类型, 必填
-* Dependencies.External[i].Location string类型，必填
 
 ### 返回值
 ```
@@ -82,13 +68,21 @@ Dependencies.External 外部的服务, 数组类型, 非必填, 内容如下：
 |name|应用名称|string|
 |init|初始化语句|string|
 |workloads|工作负载|数组|
+|templates|运行时配置模板|map|
 
 workloads的字段：
-* workloads.[i].parameter 为工作负载的参数 字符串类型
+* workloads.[i].parameter 为工作负载的参数 string
 * workloads.[i].construct 为工作负载主体部分  map[string]string类型
 * workloads.[i].traits 为workload的trait map[string]string类型
 * workloads.[i].healthProbe 为健康状态检查描述 map[string]string类型 key为bash, value为bash的内容
 
+templates的字段
+* templates.userConfigs 为运行时配置模板 string
+* templates.externalDependency 为外部应用依赖模板 string
+* templates.internalDependency 为内部应用依赖模板 string
+
+
+参数填充使用golang的html/template, 参数使用所有的参数（InstanceId, UserConfigs, RootDomain, Authorization, ServiceEntry)
 
 ```yaml
 name: cs
@@ -141,4 +135,8 @@ workloads:
     healthProb: //健康检查
       bash: |
         //health probe text
+templates:
+  userConfigs: |
+  externalDependency: |
+  internalDependency: |
 ```
