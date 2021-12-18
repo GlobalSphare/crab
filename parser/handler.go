@@ -88,7 +88,7 @@ func PostManifestHandlerFunc(c *gin.Context) {
 }
 
 func GetSystemTemplateFunc(c *gin.Context) {
-	text, err := ioutil.ReadFile("assets/cue/common.cue")
+	text, err := ioutil.ReadFile("assets/cue/systemTemplate.cue")
 	if err != nil {
 		fmt.Println(err)
 		c.JSON(200, Result{
