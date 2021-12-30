@@ -38,7 +38,7 @@ metadata:`
 const defaultMetadata = `name: example`
 
 const WorkloadVendor = (props) => {
-    
+    const preRef = useRef(null)
     const metaDataRef = useRef(null)
     const metaRef = useRef(null)
     const specRef = useRef(null)
@@ -181,6 +181,7 @@ const WorkloadVendor = (props) => {
         }).then(res => {
             if(res.data.code == 0) {
                 setSpecData(res.data.result || '')
+                preRef.current.innerText = res.data.result || ''
             }else {
                 store.dispatch({
                     type: TYPE.SNACKBAR,
@@ -203,7 +204,7 @@ const WorkloadVendor = (props) => {
         return (
             metaHeader + 
             '\n    ' + metaDataRef.current.getData().replace(reg, '\n    ') + 
-            '\nspec: | \n    ' + specRef.current.getData().replace(reg, '\n    ') +
+            '\nspec: | \n    ' + specData.replace(reg, '\n    ') +
             '\n    '+cueRef.current.getData().replace(reg, '\n        ') 
         ) 
     }
@@ -217,14 +218,6 @@ const WorkloadVendor = (props) => {
             store.dispatch({
                 type: TYPE.SNACKBAR,
                 val: 'metadata 不能为空'
-            })
-            return false
-        }
-
-        if(specRef.current.getData().trim() === '') {
-            store.dispatch({
-                type: TYPE.SNACKBAR,
-                val: 'spec 不能为空'
             })
             return false
         }
@@ -378,9 +371,6 @@ const WorkloadVendor = (props) => {
     }
 
     const specFoldFn = () => {
-        if(specFold) {
-            specRef.current.setData(specData)
-        }
         setSpecFold(!specFold)
     }
 
@@ -392,7 +382,7 @@ const WorkloadVendor = (props) => {
                 {/* <div className="header-user">userinfo</div> */}
             </header>
             <div className="online-content">
-                <div className="oltitle">{name ? '修改' : '创建'}WorkloadType</div>
+                <div className="oltitle">{name ? '修改' : '创建'}WorkloadVendor</div>
                 <section className="vendor-content">
                     <div className="vendor-left">
                         <div className="online-title"><p>yaml</p></div>
@@ -408,7 +398,10 @@ const WorkloadVendor = (props) => {
                         <div className="view-text" >spec: | 
                             <button className="fold-btn" onClick={specFoldFn}><span className={`iconfont ${specFold ? 'icon_navigation_combobox_down' : 'icon_navigation_combobox_up'}`}></span></button>
                         </div>
-                        <AutoTextarea ref={specRef} class={`textarea-edit indent4  ${specFold ? 'hide-textarea' : ''}`} />
+                        <div className={`vendor-preview indent4 ${specFold ? 'hide-textarea' : ''}`}>
+                            <pre className="preview-pre" ref={preRef}></pre>
+                        </div>
+                        {/* <AutoTextarea ref={specRef} class={`textarea-edit indent4  ${specFold ? 'hide-textarea' : ''}`} /> */}
                         <AutoTextarea ref={cueRef} class="textarea-edit indent4" />
                       
                         <div className="online-btns">
