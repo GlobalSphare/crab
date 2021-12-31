@@ -38,13 +38,14 @@ metadata:`
 const defaultMetadata = `name: example`
 
 const WorkloadVendor = (props) => {
-    
+    const preRef = useRef(null)
     const metaDataRef = useRef(null)
     const metaRef = useRef(null)
     const specRef = useRef(null)
     const cueRef = useRef(null)
     const yamlRef = useRef(null)
-    const [specFold, setSpecFold] = useState(false)
+    const [specData, setSpecData] = useState('')
+    const [specFold, setSpecFold] = useState(true)
 
     const [name, setName] = useState('')
     const [vendorInfo, setVendorInfo] = useState(null)
@@ -75,12 +76,12 @@ const WorkloadVendor = (props) => {
     useEffect(() => {
         const name = getName()
         metaRef.current.innerText = metaHeader
-        metaDataRef.current.setData(defaultMetadata)
         if(name) {
             setName(name)
             getWorkloadVendorInfo(name)
         }else {
             yamlRef.current.setData(defaultYaml)
+            metaDataRef.current.setData(defaultMetadata)
         }
     }, [])
 
@@ -97,6 +98,7 @@ const WorkloadVendor = (props) => {
            
             if(res.data.code == 0) {
                 setVendorInfo(res.data.result || {})
+                metaDataRef.current.setData(res.data.result.metadata || '')
                 yamlRef.current.setData(res.data.result.yaml || '')
                 cueRef.current.setData(res.data.result.cue || '')
 
@@ -178,7 +180,8 @@ const WorkloadVendor = (props) => {
             url: '/api/online/systemspec'
         }).then(res => {
             if(res.data.code == 0) {
-                specRef.current.setData(res.data.result || '')
+                setSpecData(res.data.result || '')
+                preRef.current.innerText = res.data.result || ''
             }else {
                 store.dispatch({
                     type: TYPE.SNACKBAR,
@@ -201,7 +204,7 @@ const WorkloadVendor = (props) => {
         return (
             metaHeader + 
             '\n    ' + metaDataRef.current.getData().replace(reg, '\n    ') + 
-            '\nspec: | \n    ' + specRef.current.getData().replace(reg, '\n    ') +
+            '\nspec: | \n    ' + specData.replace(reg, '\n    ') +
             '\n    '+cueRef.current.getData().replace(reg, '\n        ') 
         ) 
     }
@@ -215,14 +218,6 @@ const WorkloadVendor = (props) => {
             store.dispatch({
                 type: TYPE.SNACKBAR,
                 val: 'metadata 不能为空'
-            })
-            return false
-        }
-
-        if(specRef.current.getData().trim() === '') {
-            store.dispatch({
-                type: TYPE.SNACKBAR,
-                val: 'spec 不能为空'
             })
             return false
         }
@@ -387,7 +382,7 @@ const WorkloadVendor = (props) => {
                 {/* <div className="header-user">userinfo</div> */}
             </header>
             <div className="online-content">
-                <div className="oltitle">{name ? '修改' : '创建'}WorkloadType</div>
+                <div className="oltitle">{name ? '修改' : '创建'} WorkloadVendor</div>
                 <section className="vendor-content">
                     <div className="vendor-left">
                         <div className="online-title"><p>yaml</p></div>
@@ -403,9 +398,10 @@ const WorkloadVendor = (props) => {
                         <div className="view-text" >spec: | 
                             <button className="fold-btn" onClick={specFoldFn}><span className={`iconfont ${specFold ? 'icon_navigation_combobox_down' : 'icon_navigation_combobox_up'}`}></span></button>
                         </div>
-                        <AutoTextarea ref={specRef} class={`textarea-edit indent4  ${specFold ? 'hide-textarea' : ''}`} />
-                       
-                        <div className="view-text" >cue Template:</div>
+                        <div className={`vendor-preview indent4 ${specFold ? 'hide-textarea' : ''}`}>
+                            <pre className="preview-pre" ref={preRef}></pre>
+                        </div>
+                        {/* <AutoTextarea ref={specRef} class={`textarea-edit indent4  ${specFold ? 'hide-textarea' : ''}`} /> */}
                         <AutoTextarea ref={cueRef} class="textarea-edit indent4" />
                       
                         <div className="online-btns">
@@ -414,7 +410,7 @@ const WorkloadVendor = (props) => {
                         <div className="online-btns">
                             {
                                 name ? (
-                                    <Button disabled={btnDisable} className="online-btn" variant="contained" color="primary" onClick={editWorkloadVendor}>修改</Button>
+                                    <Button disabled={btnDisable} className="online-btn" variant="contained" color="primary" onClick={editWorkloadVendor}>确认修改</Button>
                                 ) : (
                                     <Button disabled={btnDisable} className="online-btn" variant="contained" color="primary" onClick={save}>保存</Button>
                                 )
