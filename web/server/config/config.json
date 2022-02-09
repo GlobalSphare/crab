@@ -1,6 +1,7 @@
 {
     "domain_test": "http://crab.island-root-domain-2.develenv.com:30600",
     "domain": "http://crab.island-root-domain-1.develenv.com:30600",
-    "port": 3000
+    "port": 3000,
+    "webssh": ""
 }
 

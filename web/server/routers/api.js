@@ -531,11 +531,12 @@ router.post('/deployment/:id', (req, res) => {
         formData.append('file', file)
         let headers = formData.getHeaders()
         let header = Object.assign({}, headers)
+
         request.putForm('/deployment/'+req.params.id, formData, header, function(response) {
             if (fs.existsSync(newPath)) {
                 fs.unlink(newPath, (err) => {})
             }
-            res.send(response.data)
+            res.send(response.data) 
         })
 
     })
