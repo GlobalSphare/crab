@@ -24,11 +24,10 @@ type Result struct {
 }
 
 func PostManifestHandlerFunc(c *gin.Context) {
-	var err error
 	p := Params{}
-	err = c.BindJSON(&p)
+	err := c.BindJSON(&p)
 	if err != nil {
-		klog.Infoln(err)
+		klog.Errorln(err)
 		c.JSON(200, Result{ErrInternalServer, "参数错误"})
 		return
 	}
@@ -54,16 +53,15 @@ func PostManifestHandlerFunc(c *gin.Context) {
 		return
 	}
 	//验证参数，返回参数json,返回vendor内容
-	workloadResource, err := CheckParams(application)
-	if err != nil {
-		klog.Errorln("检查参数错误: " + err.Error())
-		c.JSON(200, Result{ErrBadRequest, "检查参数错误: " + err.Error()})
+	workloadResource, err2 := CheckParams(application)
+	if err2.Err != nil {
+		c.JSON(200, Result{err2.ErrorType,   err2.Error()})
 		return
 	}
 	//生成vale.yaml文件
-	vale, err := GenValeYaml(p.Instanceid, application, userconfigStr, p.Host, p.Dependencies)
-	if err != nil {
-		c.JSON(200, Result{ErrInternalServer, err.Error()})
+	vale, err2 := GenValeYaml(p.Instanceid, application, userconfigStr, p.Host, p.Dependencies)
+	if err2.Err != nil {
+		c.JSON(200, Result{err2.ErrorType, err2.Error()})
 		return
 	}
 	str, err := json.Marshal(vale)
@@ -75,10 +73,10 @@ func PostManifestHandlerFunc(c *gin.Context) {
 	ioutil.WriteFile(tmpName, str, 0644)
 
 	//生成k8s.yaml文件
-	k8s, err := GenK8sYaml(p.Instanceid, vale, workloadResource)
-	if err != nil {
-		klog.Errorln(err)
-		c.JSON(200, Result{ErrInternalServer, err.Error()})
+	k8s, err2 := GenK8sYaml(p.Instanceid, vale, workloadResource)
+	if err2.Err != nil {
+		klog.Errorln(err2.Error())
+		c.JSON(200, Result{err2.ErrorType, err2.Error()})
 		return
 	}
 	tmpName = fmt.Sprintf("/tmp/%s-k8s.yaml", p.Instanceid)

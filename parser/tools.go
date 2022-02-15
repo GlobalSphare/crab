@@ -24,13 +24,12 @@ import (
 var HTTPClient = httpclient.NewClient(httpclient.WithHTTPTimeout(time.Second * 30))
 
 //由manifest.yaml生成vale.yaml
-func GenValeYaml(instanceId string, application v1alpha1.Application, userconfigs string, host string, dependencies Dependency) (VelaYaml, error) {
+func GenValeYaml(instanceId string, application v1alpha1.Application, userconfigs string, host string, dependencies Dependency) (VelaYaml, Error) {
 	var vela = VelaYaml{"", make(map[string]interface{}, 0)}
-	var err error
 	vela.Name = application.Metadata.Name
 
 	authorization, serviceEntry, err := parseDependencies(application, dependencies)
-	if err != nil {
+	if err.Err != nil {
 		return vela, err
 	}
 	//应用内部的授权
@@ -48,7 +47,6 @@ func GenValeYaml(instanceId string, application v1alpha1.Application, userconfig
 	dependHost := make(dependencyHost, 0)
 	for _, v := range dependencies.Internal {
 
-
 		//解析依赖items
 		resources := make([]DependencyUseItem, 0)
 		for _, depend := range application.Spec.Dependencies {
@@ -56,8 +54,9 @@ func GenValeYaml(instanceId string, application v1alpha1.Application, userconfig
 				location := depend.Location[len("user-defined("): len(depend.Location)-1]
 				arr, err := url.ParseRequestURI(location)
 				if err != nil {
-					klog.Errorln("dependencies.location解析失败", err.Error())
-					return vela, err
+					err = errors.New("dependencies.location解析失败 " +err.Error())
+					klog.Errorln(err.Error())
+					return vela, Error{err, ErrBadRequest}
 				}
 				if strings.ToLower(arr.Scheme) == "tcp" {
 					fmt.Println("内部 tcp service:", v.EntryService)
@@ -67,8 +66,8 @@ func GenValeYaml(instanceId string, application v1alpha1.Application, userconfig
 			}
 			ItemsResult, err := ApiParse(depend.Items)
 			if depend.Name == v.Name {
-				if err != nil {
-					klog.Error(err.Error())
+				if err.Err != nil {
+					klog.Errorln(err.Error())
 					return vela, err
 				}
 				for _, item := range ItemsResult{
@@ -110,11 +109,11 @@ func GenValeYaml(instanceId string, application v1alpha1.Application, userconfig
 		}
 		vela.Services[workload.Name] = properties
 	}
-	return vela, nil
+	return vela, Error{}
 }
 
 //由vale.yaml生成k8s
-func GenK8sYaml(instanceId string, vela VelaYaml, workloadParam map[string]WorkloadParam) (string, error) {
+func GenK8sYaml(instanceId string, vela VelaYaml, workloadParam map[string]WorkloadParam) (string, Error) {
 	finalContext := ""
 	//自动追加的部分
 	//处理workload
@@ -125,18 +124,17 @@ func GenK8sYaml(instanceId string, vela VelaYaml, workloadParam map[string]Workl
 			instanceId,
 		}
 		k8sStr, err := Export(ctx, workloadParam[k], v)
-		if err != nil {
-			klog.Errorln(err)
+		if err.Err != nil {
 			return "", err
 		}
 		finalContext += k8sStr + "\n---\n"
 	}
 	finalContext = strings.Trim(strings.TrimSpace(finalContext), "---")
 	finalContext = fmt.Sprintf("# appName: %s\n%s", vela.Name, finalContext)
-	return finalContext, nil
+	return finalContext, Error{}
 }
 
-func Export(ctxObj ContextObj, workloadParam WorkloadParam, workload interface{}) (string, error) {
+func Export(ctxObj ContextObj, workloadParam WorkloadParam, workload interface{}) (string, Error) {
 	var k8s = ""
 	template := workloadParam.VendorCue
 	ctxData := make(map[string]interface{}, 0)
@@ -144,18 +142,18 @@ func Export(ctxObj ContextObj, workloadParam WorkloadParam, workload interface{}
 	ctxObjData, err := json.Marshal(ctxData)
 	if err != nil {
 		klog.Errorln("ctxObj 序列化失败: ", err.Error())
-		return "", errors.New("ctxObj 序列化失败")
+		return "", Error{errors.New("ctxObj 序列化失败"), ErrInternalServer}
 	}
 	serviceData, err := json.Marshal(workload)
 	if err != nil {
 		klog.Errorln("vela.Services 序列化失败: ", err.Error())
-		return "", errors.New("vela.Services 序列化失败")
+		return "", Error{errors.New("vela.Services 序列化失败"), ErrInternalServer}
 	}
 	cueStr := fmt.Sprintf("%s\nparameter:%s\n%s", ctxObjData, serviceData, template)
 	err = ioutil.WriteFile(fmt.Sprintf("/tmp/%s-%s.cue", ctxObj.Namespace, ctxObj.WorkloadName), []byte(cueStr), 0644)
 	if err != nil {
 		klog.Errorln("保存cue文件错误: ", err.Error())
-		return "", err
+		return "", Error{errors.New("保存cue文件错误"), ErrInternalServer}
 	}
 	//处理cue内置的pkg
 	cueStr = MoveCuePkgToTop(cueStr)
@@ -164,8 +162,9 @@ func Export(ctxObj ContextObj, workloadParam WorkloadParam, workload interface{}
 	ctx = cuecontext.New()
 	value = ctx.CompileString(cueStr)
 	if value.Err() != nil {
-		klog.Errorln("cue生成yaml失败: ", value.Err().Error())
-		return "", value.Err()
+		err := fmt.Errorf("cue生成yaml失败 %s", value.Err().Error())
+		klog.Errorln(err.Error())
+		return "", Error{err, ErrInternalServer}
 	}
 	context := make(map[string]interface{}, 0)
 	err = value.Decode(&context)
@@ -174,7 +173,7 @@ func Export(ctxObj ContextObj, workloadParam WorkloadParam, workload interface{}
 			b, err := yaml.Marshal(v)
 			if err != nil {
 				klog.Errorln("解析CUE失败: ", err)
-				return "", err
+				return "", Error{err, ErrInternalServer}
 			}
 			if k == "namespace" {
 				k8s = fmt.Sprintf("%s\n---\n%s", string(b), k8s)
@@ -183,12 +182,11 @@ func Export(ctxObj ContextObj, workloadParam WorkloadParam, workload interface{}
 			}
 		}
 	}
-	return strings.TrimSpace(k8s), nil
+	return strings.TrimSpace(k8s), Error{}
 }
 
 //处理依赖
-func parseDependencies(application v1alpha1.Application, dependencies Dependency) ([]Authorization, []ServiceEntry, error) {
-	var err error
+func parseDependencies(application v1alpha1.Application, dependencies Dependency) ([]Authorization, []ServiceEntry, Error) {
 	auth := make([]Authorization, 0)
 	//外部服务调用
 	svcEntry := make([]ServiceEntry, 0)
@@ -221,7 +219,7 @@ func parseDependencies(application v1alpha1.Application, dependencies Dependency
 		arr, err := url.ParseRequestURI(item.Location)
 		if err != nil {
 			klog.Errorln("dependencies.location解析失败", err.Error())
-			return auth, svcEntry, err
+			return auth, svcEntry, Error{err, ErrBadRequest}
 		}
 		var protocol string
 		if arr.Scheme == "https" {
@@ -231,8 +229,9 @@ func parseDependencies(application v1alpha1.Application, dependencies Dependency
 		} else if strings.ToLower(arr.Scheme) == "tcp" {
 			protocol = "TCP"
 		} else {
-			klog.Errorln(fmt.Sprintf("location不支持协议: %s", arr.Scheme))
-			return auth, svcEntry, errors.New(fmt.Sprintf("location不支持协议: %s", arr.Scheme))
+			err = fmt.Errorf("location不支持协议: %s", arr.Scheme)
+			klog.Errorln(err.Error())
+			return auth, svcEntry, Error{err, ErrBadRequest}
 		}
 		hostArr := strings.Split(arr.Host, ":")
 		var port int
@@ -245,8 +244,8 @@ func parseDependencies(application v1alpha1.Application, dependencies Dependency
 		} else { //指定端口号
 			port, err = strconv.Atoi(hostArr[1])
 			if err != nil {
-				klog.Errorln("端口号错误 Error:", hostArr[1])
-				return auth, svcEntry, errors.New("端口号错误")
+				err2 := fmt.Errorf("端口号错误 Error: %s", hostArr[1])
+				return auth, svcEntry, Error{err2, ErrBadRequest}
 			}
 		}
 		ipAddress := net.ParseIP(hostArr[0])
@@ -259,57 +258,54 @@ func parseDependencies(application v1alpha1.Application, dependencies Dependency
 		svcEntry = append(svcEntry, ServiceEntry{item.Name, address, host, port, protocol})
 	}
 
-	return auth, svcEntry, err
+	return auth, svcEntry, Error{}
 }
 
 //获取WorkloadType
-func GetWorkloadType(typeName string) (v1alpha1.WorkloadType, error) {
+func GetWorkloadType(typeName string) (v1alpha1.WorkloadType, Error) {
 	var t v1alpha1.WorkloadType
 	value, err := GetWorkloadDef("workloadType", typeName)
-	if err != nil {
+	if err.Err != nil {
 		klog.Errorln("获取workloadType失败 Error:", err.Error())
-		err = errors.New(fmt.Sprintf("workloadType:%s不存在", typeName))
 		return t, err
 	}
-	err = yaml.Unmarshal([]byte(value), &t)
-	if err != nil {
+	err2 := yaml.Unmarshal([]byte(value), &t)
+	if err2 != nil {
 		klog.Errorln("workloadType反序列化失败 Error:", err.Error())
-		err = errors.New(fmt.Sprintf("解析workloadType:%s失败", typeName))
+		return t, Error{fmt.Errorf("解析workloadType:%s失败", typeName), ErrInternalServer}
 	}
-	return t, err
+	return t, Error{}
 }
 
 //获取trait
-func GetTrait(name string) (v1alpha1.Trait, error) {
+func GetTrait(name string) (v1alpha1.Trait, Error) {
 	var t v1alpha1.Trait
 	value, err := GetWorkloadDef("trait", name)
-	if err != nil {
+	if err.Err != nil {
 		klog.Errorln("获取trait失败 Error:", err.Error())
-		err = errors.New(fmt.Sprintf("trait:%s不存在", name))
 		return t, err
 	}
 	//解析为结构体
-	err = yaml.Unmarshal([]byte(value), &t)
-	if err != nil {
+	err2 := yaml.Unmarshal([]byte(value), &t)
+	if err2 != nil {
 		klog.Errorln("trait反序列化失败 Error:", err.Error())
-		err = errors.New(fmt.Sprintf("解析trait:%s失败", name))
+		return t, Error{fmt.Errorf("解析trait: %s失败", name), ErrInternalServer}
 	}
-	return t, err
+	return t, Error{}
 }
 
 //获取WorkloadVendor
-func GetWorkloadVendor(name string) (v1alpha1.WorkloadVendor, error) {
+func GetWorkloadVendor(name string) (v1alpha1.WorkloadVendor, Error) {
 	var v v1alpha1.WorkloadVendor
 	value, err := GetWorkloadDef("workloadVendor", name)
-	if err != nil {
+	if err.Err != nil {
 		klog.Errorln("获取workloadVendor失败 Error:", err.Error())
-		err = errors.New(fmt.Sprintf("workloadVendor:%s不存在", name))
 		return v, err
 	}
-	err = yaml.Unmarshal([]byte(value), &v)
-	if err != nil {
-		klog.Errorln("workloadVendor反序列化失败 Error:", err.Error())
-		err = errors.New(fmt.Sprintf("解析workloadVendor:%s失败", name))
+	err2 := yaml.Unmarshal([]byte(value), &v)
+	if err2 != nil {
+		klog.Errorln("workloadVendor反序列化失败 %s Error", err.Error())
+		return v, Error{fmt.Errorf("workloadVendor反序列化失败 %s", name), ErrInternalServer}
 	}
 	return v, err
 	//path := fmt.Sprintf("%s%s.yaml", workloadPath, vendorName)
@@ -422,8 +418,7 @@ func MoveCuePkgToTop(str string) string {
 	return strings.Join(pkg, "\n") + "\n" + str
 }
 
-func ApiParse(items map[string][]string) ([]DependencyUseItem, error) {
-	var err error
+func ApiParse(items map[string][]string) ([]DependencyUseItem, Error) {
 	rtn := make([]DependencyUseItem, 0)
 	for k, v := range items {
 		count := 0
@@ -438,30 +433,33 @@ func ApiParse(items map[string][]string) ([]DependencyUseItem, error) {
 			} else if option == "delete" {
 				actions = append(actions, "DELETE")
 			} else {
-				return rtn, errors.New(fmt.Sprintf("依赖资源的操作类型(%s)不存在\n", option))
+				err := fmt.Errorf("依赖资源的操作类型(%s)不存在\n", option)
+				klog.Errorln(err.Error())
+				return rtn, Error{err, ErrBadRequest}
 			}
 			count++
 		}
 		if count == 0 {
-			return rtn, errors.New("依赖资源的操作类型不能为空")
+			err := errors.New("依赖资源的操作类型不能为空")
+			return rtn, Error{err, ErrBadRequest}
 		}
 		rtn = append(rtn, DependencyUseItem{k, actions})
 	}
-	return rtn, err
+	return rtn, Error{}
 }
 
 //校验trait参数
-func CheckTraitParam(workloadTrait Trait) error {
+func CheckTraitParam(workloadTrait Trait) Error {
 	properties := GetProperties(workloadTrait.Properties)
 	properties2, err := json.Marshal(properties)
 	if err != nil {
 		klog.Errorln(err)
-		return errors.New("trait参数序列化失败")
+		return Error{errors.New("trait参数序列化失败"), ErrInternalServer}
 	}
-	file, err := GetTrait(workloadTrait.Type)
-	if err != nil {
-		klog.Errorln(err)
-		return err
+	file, err2 := GetTrait(workloadTrait.Type)
+	if err2.Err != nil {
+		klog.Errorln(err2)
+		return err2
 	}
 	cueStr := fmt.Sprintf("parameter:%s\nparameter: {\n%s\n}", string(properties2), file.Spec.Parameter)
 	var ctx *cue.Context
@@ -470,67 +468,67 @@ func CheckTraitParam(workloadTrait Trait) error {
 	value = ctx.CompileString(cueStr)
 	err = value.Validate(cue.Concrete(true))
 	if err != nil {
-		return err
+		klog.Errorln(err)
+		return Error{err, ErrInternalServer}
 	}
-	return nil
+	return Error{}
 }
 
 //校验type参数
-func CheckTypeParam(workload v1alpha1.Workload) error {
+func CheckTypeParam(workload v1alpha1.Workload) Error {
 	var t v1alpha1.WorkloadType
-	var err error
 	properties := GetProperties(workload.Properties)
-	t, err = GetWorkloadType(workload.Type)
-	if err != nil {
-		klog.Infoln(err)
+	t, err := GetWorkloadType(workload.Type)
+	if err.Err != nil {
+		klog.Errorln(err.Error())
 		return err
 	}
-	properties2, err := json.Marshal(properties)
-	if err != nil {
-		return err
+	properties2, err2 := json.Marshal(properties)
+	if err2 != nil {
+		klog.Errorln(err2.Error())
+		return Error{err2, ErrInternalServer}
 	}
 	parameterStr := fmt.Sprintf("parameter:{ \n%s\n}\nparameter:{\n%s\n}", t.Spec.Parameter, string(properties2))
 	var ctx *cue.Context
 	var value cue.Value
 	ctx = cuecontext.New()
 	value = ctx.CompileString(parameterStr)
-	err = value.Validate(cue.Concrete(true))
-	if err != nil {
-		klog.Errorln(err)
-		return err
+	validateErr := value.Validate(cue.Concrete(true))
+	if validateErr != nil {
+		klog.Errorln(validateErr.Error())
+		return Error{validateErr,ErrInternalServer}
 	}
-	return nil
+	return Error{}
 }
 
-func CheckParams(application v1alpha1.Application) (map[string]WorkloadParam, error) {
-	var err error
+func CheckParams(application v1alpha1.Application) (map[string]WorkloadParam, Error) {
 	returnData := make(map[string]WorkloadParam, 0)
 	if len(application.Spec.Workloads) == 0 {
-		err = errors.New("spec.workloads 不能为空")
-		return returnData, err
+		klog.Errorln("spec.workloads 不能为空")
+		return returnData, Error{errors.New("spec.workloads 不能为空"), ErrBadRequest}
 	}
 	ingressCount := 0
 	for _, workload := range application.Spec.Workloads {
 		if workload.Name == "" {
-			err = errors.New("workloads.name 不能为空")
-			return returnData, err
+			klog.Errorln("spec.workloads.name 不能为空")
+			return returnData, Error{errors.New("spec.workloads.name 不能为空"), ErrBadRequest}
 		}
 		if workload.Type == "" {
-			err = errors.New("workloads.type 不能为空")
-			return returnData, err
+			klog.Errorln("spec.workloads.type 不能为空")
+			return returnData, Error{errors.New("spec.workloads.type 不能为空"), ErrBadRequest}
 		}
 		if workload.Vendor == "" {
-			err = errors.New("workloads.vendor 不能为空")
-			return returnData, err
+			klog.Errorln("spec.workloads.vendor 不能为空")
+			return returnData, Error{errors.New("spec.workloads.vendor 不能为空"), ErrBadRequest}
 		}
 		//检查type参数
-		err = CheckTypeParam(workload)
-		if err != nil {
+		err := CheckTypeParam(workload)
+		if err.Err != nil {
 			klog.Errorln("检查type参数 Error:", err)
 			return returnData, err
 		}
 		workloadType, err := GetWorkloadType(workload.Type)
-		if err != nil {
+		if err.Err != nil {
 			return returnData, err
 		}
 		//检查trait参数
@@ -544,11 +542,12 @@ func CheckParams(application v1alpha1.Application) (map[string]WorkloadParam, er
 					}
 				}
 				if exist == false {
-					err = errors.New(fmt.Sprintf("workloadType:%s不支持trait:%s", workload.Type, trait.Type))
-					return returnData, err
+					err := fmt.Errorf("workloadType:%s不支持trait:%s", workload.Type, trait.Type)
+					klog.Errorln(err.Error())
+					return returnData, Error{err, ErrInternalServer}
 				}
 				err = CheckTraitParam(trait)
-				if err != nil {
+				if err.Err != nil {
 					klog.Errorln("检查trait参数 Error:", err)
 					return returnData, err
 				}
@@ -569,8 +568,8 @@ func CheckParams(application v1alpha1.Application) (map[string]WorkloadParam, er
 
 		var v v1alpha1.WorkloadVendor
 		v, err = GetWorkloadVendor(workload.Vendor)
-		if err != nil {
-			klog.Errorln(err)
+		if err.Err != nil {
+			klog.Errorln(err.Error())
 			return returnData, err
 		}
 		workloadParams.VendorCue = v.Spec
@@ -578,10 +577,10 @@ func CheckParams(application v1alpha1.Application) (map[string]WorkloadParam, er
 	}
 	//trait:ingress最多一个
 	if ingressCount > 1 {
-		err = errors.New("不能有多个ingress")
-		return returnData, err
+		err := errors.New("不能有多个ingress")
+		return returnData, Error{err, ErrInternalServer}
 	}
-	return returnData, nil
+	return returnData, Error{}
 }
 func GetProperties(properties map[string]interface{}) map[string]interface{} {
 	ret := make(map[string]interface{}, 0)
@@ -597,7 +596,7 @@ func FileExist(path string) bool {
 }
 
 //获取workload定义
-func GetWorkloadDef(kind, name string) (string, error) {
+func GetWorkloadDef(kind, name string) (string, Error) {
 	type def struct {
 		Id         int `json:"id"`
 		Name       string `json:"name"`
@@ -608,31 +607,36 @@ func GetWorkloadDef(kind, name string) (string, error) {
 	var err error
 	kind = strings.TrimSpace(kind)
 	if kind == "" {
-		return "", errors.New("不能为空")
+		klog.Errorln("kind不能为空")
+		return "", Error{errors.New("kind不能为空"), ErrInternalServer}
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return "", errors.New("名称不能为空")
+		klog.Errorln("名称不能为空")
+		return "", Error{errors.New("名称不能为空"), ErrBadRequest}
 	}
 	res, err := HTTPClient.Get(fmt.Sprintf("http://127.0.0.1:3000/%s/%s", kind, name), nil)
 	if err != nil {
-		return "", fmt.Errorf("%s: %s 不存在", kind, name)
+		klog.Errorln("请求api失败", err.Error())
+		return "", Error{errors.New(err.Error()), ErrBadRequest}
 	}
 	bodyBytes, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return "", fmt.Errorf("读取api返回错误: %w", err)
+		klog.Errorln("读取响应内容失败", err.Error())
+		return "", Error{fmt.Errorf("读取响应内容失败 %w", err), ErrInternalServer}
 	}
-	klog.Infoln("api返回内容:", string(bodyBytes))
 	var reply struct {
-		Code   int         `json:"code"`
+		Code   int `json:"code"`
 		Result def `json:"result"`
 	}
 	err = json.Unmarshal(bodyBytes, &reply)
 	if err != nil {
-		return "", fmt.Errorf("api返回序列化错误: %w", err)
+		klog.Errorln("响应内容反序列化失败", err.Error())
+		return "", Error{fmt.Errorf("反序列化失败: %w", err), ErrInternalServer}
 	}
 	if reply.Code != 0 {
-		return "", fmt.Errorf("api返回错误: %v", reply.Result)
+		klog.Errorln("请求api错误", reply.Result)
+		return "", Error{fmt.Errorf("请求api错误: %v", reply.Result),ErrInternalServer}
 	}
-	return reply.Result.Value, err
+	return reply.Result.Value, Error{}
 }

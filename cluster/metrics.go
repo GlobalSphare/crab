@@ -60,7 +60,7 @@ type DataPoints []DataPoint
 func GetDataPointsFromMetricsService(namespace, resourceType, name string) (DataPoints, error) {
 	endpoint := fmt.Sprintf(
 		"http://island-metrics/api/v1/dashboard/namespaces/%s/pod-list/%s/metrics/%s/%v",
-		namespace, name, resourceType,time.Now().UnixMicro())
+		namespace, name, resourceType,time.Now().Unix())
 	resp, err := HTTPClient.Get(endpoint, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "请求MetricsService失败")
